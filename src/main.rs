@@ -103,6 +103,11 @@ async fn test_leave(api: Api, message: Message) -> Result<(), Error> {
     Ok(())
 }
 
+async fn test_meme(api: Api, message: Message) -> Result<(), Error> {
+    api.send(message.text_reply("Reply to message")).await?;
+    Ok(())
+}
+
 async fn test(api: Api, message: Message) -> Result<(), Error> {
     match message.kind {
         MessageKind::Text { ref data, .. } => match data.as_str() {
@@ -117,6 +122,7 @@ async fn test(api: Api, message: Message) -> Result<(), Error> {
             "/get_chat_member" => test_get_chat_member(api, message).await?,
             "/get_user_profile_photos" => test_get_user_profile_photos(api, message).await?,
             "/leave" => test_leave(api, message).await?,
+            "/jojomeme" => test_meme(api, message).await?,
             _ => (),
         },
         _ => (),
