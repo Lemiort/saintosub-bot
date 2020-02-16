@@ -1,3 +1,4 @@
+extern crate rawr;
 use std::env;
 use std::time::Duration;
 
@@ -5,6 +6,8 @@ use futures::StreamExt;
 use telegram_bot::prelude::*;
 use telegram_bot::{Api, Error, Message, MessageKind, ParseMode, UpdateKind};
 use tokio::time::delay_for;
+
+use rawr::prelude::*;
 
 async fn test_message(api: Api, message: Message) -> Result<(), Error> {
     api.send(message.text_reply("Simple message")).await?;
@@ -104,7 +107,12 @@ async fn test_leave(api: Api, message: Message) -> Result<(), Error> {
 }
 
 async fn test_meme(api: Api, message: Message) -> Result<(), Error> {
-    api.send(message.text_reply("Reply to message")).await?;
+    let reply = get_last_meme();
+    let mut text = String::from("Wryyyyy");
+    if let Some(title) = reply {
+        text = title;
+    }
+    api.send(message.text_reply(text)).await?;
     Ok(())
 }
 
@@ -129,6 +137,34 @@ async fn test(api: Api, message: Message) -> Result<(), Error> {
     };
 
     Ok(())
+}
+
+fn get_last_meme() -> Option<String> {
+    // Creates a new client to access the reddit API. You need to set a user agent so Reddit knows
+    // who is using this client.
+    let client = RedditClient::new(
+        "linux:saintnosubbot:v0.0.1 (by /u/Lemiort)",
+        AnonymousAuthenticator::new(),
+    );
+    // Access the subreddit /r/ShitPostCrusaders.
+    let subreddit = client.subreddit("ShitPostCrusaders");
+    // Gets the hot listing of /r/ShitPostCrusaders. If the API request fails, we will panic with `expect`.
+    let hot_listing = subreddit
+        .new(ListingOptions::default())
+        .expect("Could not fetch post listing!");
+    // Iterates through the top 50 posts of /r/ShitPostCrusaders. If you do not `take(n)`, this iterator will
+    // continue forever!
+
+    // let posts = hot_listing.take(50);
+    // for post in posts {
+    //     println!("{}", post.title());
+    // }
+    let last_post = hot_listing.last();
+
+    if let Some(post) = last_post {
+        return Some(post.title().to_owned());
+    }
+    return None;
 }
 
 #[tokio::main]
