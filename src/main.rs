@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use telegram_bot::prelude::*;
-use telegram_bot::{Api, Error, Message, MessageKind, ParseMode, UpdateKind};
+use telegram_bot::{Api, Error, InputFileRef, Message, MessageKind, ParseMode, UpdateKind};
 use tokio::time::delay_for;
 
 use rawr::prelude::*;
@@ -108,28 +108,31 @@ async fn test_leave(api: Api, message: Message) -> Result<(), Error> {
 
 async fn test_meme(api: Api, message: Message) -> Result<(), Error> {
     let reply = get_last_meme();
-    let mut text = String::from("Wryyyyy");
+    let mut text = String::from("https://i.redd.it/dv7afptdh9131.jpg");
     if let Some(title) = reply {
         text = title;
     }
-    api.send(message.text_reply(text)).await?;
+
+    let chat = message.chat.clone();
+    let photo = chat.photo(InputFileRef::new(text));
+    api.send(photo).await?;
     Ok(())
 }
 
 async fn test(api: Api, message: Message) -> Result<(), Error> {
     match message.kind {
         MessageKind::Text { ref data, .. } => match data.as_str() {
-            "/message" => test_message(api, message).await?,
-            "/preview" => test_preview(api, message).await?,
-            "/reply" => test_reply(api, message).await?,
-            "/forward" => test_forward(api, message).await?,
-            "/edit-message" => test_edit_message(api, message).await?,
-            "/get_chat" => test_get_chat(api, message).await?,
-            "/get_chat_administrators" => test_get_chat_administrators(api, message).await?,
-            "/get_chat_members_count" => test_get_chat_members_count(api, message).await?,
-            "/get_chat_member" => test_get_chat_member(api, message).await?,
-            "/get_user_profile_photos" => test_get_user_profile_photos(api, message).await?,
-            "/leave" => test_leave(api, message).await?,
+            // "/message" => test_message(api, message).await?,
+            // "/preview" => test_preview(api, message).await?,
+            // "/reply" => test_reply(api, message).await?,
+            // "/forward" => test_forward(api, message).await?,
+            // "/edit-message" => test_edit_message(api, message).await?,
+            // "/get_chat" => test_get_chat(api, message).await?,
+            // "/get_chat_administrators" => test_get_chat_administrators(api, message).await?,
+            // "/get_chat_members_count" => test_get_chat_members_count(api, message).await?,
+            // "/get_chat_member" => test_get_chat_member(api, message).await?,
+            // "/get_user_profile_photos" => test_get_user_profile_photos(api, message).await?,
+            // "/leave" => test_leave(api, message).await?,
             "/jojomeme" => test_meme(api, message).await?,
             _ => (),
         },
@@ -162,7 +165,7 @@ fn get_last_meme() -> Option<String> {
     let last_post = hot_listing.last();
 
     if let Some(post) = last_post {
-        return Some(post.title().to_owned());
+        return post.link_url();
     }
     return None;
 }
