@@ -12,3 +12,4 @@ telegram-bot = {git="https://github.com/telegram-rs/telegram-bot"}
 tokio-core = "0.1"
 tokio = { version = "0.2", features = ["full"] }
 rawr = {git="https://github.com/Jokler/rawr.git"}
+regex = "1"
