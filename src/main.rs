@@ -1,162 +1,161 @@
 extern crate rawr;
-use std::env;
+use std::{collections::HashSet, env, thread, time};
 
 use futures::StreamExt;
-use regex::Regex;
 use telegram_bot::prelude::*;
 use telegram_bot::{
-    Api, Error, GetMe, InputFileRef, Message, MessageKind, MessageOrChannelPost, UpdateKind,
+    Api, Error, GetMe, InputFileRef, Message, MessageChat, MessageKind, MessageOrChannelPost,
+    UpdateKind, User,
 };
 // use tokio::time::delay_for;
 
 use rawr::prelude::*;
 
 const FOOL_PIC_LINK: &str = "https://c7.hotpng.com/preview/259/820/839/dio-brando-jojo-s-bizarre-adventure-eyes-of-heaven-youtube-diamond-is-unbreakable-just-cause-thumbnail.jpg";
-const APPROACHING_PIC_LINK: &str = "https://i.ytimg.com/vi/IJJM_ccGxSQ/maxresdefault.jpg";
+// const APPROACHING_PIC_LINK: &str = "https://i.ytimg.com/vi/IJJM_ccGxSQ/maxresdefault.jpg";
 const WTF_PIC_LINK: &str = "https://i.redd.it/dv7afptdh9131.jpg";
 const ROAD_ROLLER_PIC_LINK: &str = "https://i.ytimg.com/vi/t1y3QOIRsYs/maxresdefault.jpg";
 const DOESNT_MATTER_PIC_LINK: &str =
     "https://i.kym-cdn.com/entries/icons/original/000/029/407/Screenshot_14.jpg";
 
-// async fn start_message(api: Api, message: Message) -> Result<(), Error> {
-//     api.send(message.text_reply(
-//         "Master Dio Brando. My stand power is Jojo memes.
-//                                 Ask me kindly for meme with /jojomeme",
-//     ))
-//     .await?;
-//     Ok(())
-// }
-
-async fn reply_with_photo(api: Api, message: Message, link: String) -> Result<(), Error> {
-    let mut photo = telegram_bot::requests::SendPhoto::new(message.chat, InputFileRef::new(link));
-    photo.reply_to(message.id);
-    api.send(photo).await?;
-    Ok(())
+pub struct SaintnosubBot<'a> {
+    api: Api,
+    hot_listing: &'a mut rawr::structures::listing::Listing<'a>,
+    memeless_users: HashSet<User>,
 }
 
-async fn drugs_message(api: Api, message: Message) -> Result<(), Error> {
-    if let Some(reply_box) = message.reply_to_message {
-        let value = *reply_box;
-        if let MessageOrChannelPost::Message(org_message) = value {
-            reply_with_photo(api, org_message, String::from(ROAD_ROLLER_PIC_LINK)).await?;
-        }
-    } else {
-        reply_with_photo(api, message, String::from(DOESNT_MATTER_PIC_LINK)).await?;
+impl<'a> SaintnosubBot<'a> {
+    pub fn new(api: Api, hot_listing: &'a mut rawr::structures::listing::Listing<'a>) -> Self {
+        return SaintnosubBot {
+            api: api,
+            hot_listing: hot_listing,
+            memeless_users: HashSet::new(),
+        };
     }
-    Ok(())
-}
+    async fn reply_with_photo(&mut self, message: Message, link: String) -> Result<(), Error> {
+        let mut photo =
+            telegram_bot::requests::SendPhoto::new(message.chat, InputFileRef::new(link));
+        photo.reply_to(message.id);
+        self.api.send(photo).await?;
+        Ok(())
+    }
+    async fn drugs_message(&mut self, message: Message) -> Result<(), Error> {
+        if let Some(reply_box) = message.reply_to_message {
+            let value = *reply_box;
+            if let MessageOrChannelPost::Message(org_message) = value {
+                self.reply_with_photo(org_message, String::from(ROAD_ROLLER_PIC_LINK))
+                    .await?;
+            }
+        } else {
+            self.reply_with_photo(message, String::from(DOESNT_MATTER_PIC_LINK))
+                .await?;
+        }
+        Ok(())
+    }
 
-async fn greet_users(api: Api, message: Message) -> Result<(), Error> {
-    if let MessageKind::NewChatMembers { ref data, .. } = message.kind {
-        let result = api.send(GetMe).await?;
-        let mut self_greeting = true;
-        let mut usernames = String::new();
-        for user in data {
-            if user.id != result.id {
-                self_greeting = false;
-                if let Some(login) = &user.username {
-                    usernames = format!("{} @{}, ", usernames, login);
-                } else {
-                    usernames = format!("{} {}, ", usernames, user.first_name);
+    async fn wait_for_meme(&mut self, chat: MessageChat, user: User) -> Result<(), Error> {
+        println!("Wait for meme {} ", user.first_name);
+        // 15 mins to send a meme
+        thread::sleep(time::Duration::from_secs(900));
+        if self.memeless_users.contains(&user) {
+            println!("Kick {} ", user.first_name);
+            self.api.send(chat.kick(user)).await?;
+        }
+        Ok(())
+    }
+
+    async fn greet_users(&mut self, message: Message) -> Result<(), Error> {
+        if let MessageKind::NewChatMembers { ref data, .. } = message.kind {
+            let me = self.api.send(GetMe).await?;
+            let mut usernames = String::new();
+            for user in data {
+                if user.id != me.id {
+                    self.memeless_users.insert(user.clone());
+                    if let Some(login) = &user.username {
+                        usernames = format!("{} @{}, ", usernames, login);
+                    } else {
+                        usernames = format!("{} {}, ", usernames, user.first_name);
+                    }
+                }
+            }
+            let greeting = format!("{} мем или бан!", usernames);
+            self.api.send(message.clone().text_reply(greeting)).await?;
+            for user in data {
+                if user.id != me.id {
+                    self.wait_for_meme(message.clone().chat, user.clone())
+                        .await?;
                 }
             }
         }
-        if self_greeting == false {
-            let greeting = format!("{} мем или бан!", usernames);
-            api.send(message.text_reply(greeting)).await?;
-        }
+        Ok(())
     }
-    Ok(())
-}
-
-async fn goodbye_user(api: Api, message: Message) -> Result<(), Error> {
-    if let MessageKind::LeftChatMember { ref data, .. } = message.kind {
-        let result = api.send(GetMe).await?;
-        if data.id != result.id {
-            let greeting = String::from("Скатерью дорожка");
-            api.send(message.text_reply(greeting)).await?;
-        }
-    }
-    Ok(())
-}
-
-async fn send_meme(
-    api: Api,
-    mut listing: &mut rawr::structures::listing::Listing<'_>,
-    message: Message,
-) -> Result<(), Error> {
-    let reply = get_last_meme(&mut listing);
-    let mut text = String::from(WTF_PIC_LINK);
-    if let Some(title) = reply {
-        text = title;
-    }
-
-    reply_with_photo(api, message, text).await?;
-    Ok(())
-}
-
-async fn parse_message(api: Api, message: Message) -> Result<(), Error> {
-    if let MessageKind::Text { ref data, .. } = message.kind {
-        let text = data.as_str();
-        if message.from.is_bot {
-            if text.contains("#game") {
-                reply_with_photo(api, message, String::from(FOOL_PIC_LINK)).await?;
+    async fn goodbye_user(&mut self, message: Message) -> Result<(), Error> {
+        if let MessageKind::LeftChatMember { ref data, .. } = message.kind {
+            let result = self.api.send(GetMe).await?;
+            if data.id != result.id {
+                let greeting = String::from("Скатерью дорожка");
+                self.api.send(message.text_reply(greeting)).await?;
             }
         }
+        Ok(())
     }
-    Ok(())
-}
 
-fn is_jojo(name: &String, second_name: &Option<String>) -> bool {
-    if let Some(second_name) = second_name {
-        let re1 = Regex::new(r"^[Jj][Oo][Jj][Oo][A-Za-z]*$").unwrap();
-        let match1 = re1.is_match(name);
-        let re2 = Regex::new(r"^[A-Za-z]*[Jj][Oo][Jj][Oo]$").unwrap();
-        let match2 = re2.is_match(second_name);
-        return match1 && match2;
-    } else {
-        let re = Regex::new(r"^[Jj][Oo][Jj][Oo]$").unwrap();
-        return re.is_match(name);
-    }
-}
-
-async fn parse_photo(api: Api, message: Message) -> Result<(), Error> {
-    if let MessageKind::Photo { .. } = message.kind {
-        println!("There is photo from {}", message.from.first_name);
-        if message.from.is_bot && is_jojo(&message.from.first_name, &message.from.last_name) {
-            reply_with_photo(api, message, String::from(APPROACHING_PIC_LINK)).await?;
+    async fn send_meme(&mut self, message: Message) -> Result<(), Error> {
+        let reply = self.get_last_meme();
+        let mut text = String::from(WTF_PIC_LINK);
+        if let Some(title) = reply {
+            text = title;
         }
+        self.reply_with_photo(message, text).await?;
+        Ok(())
     }
-    Ok(())
-}
-
-async fn handle_message(
-    api: Api,
-    listing: &mut rawr::structures::listing::Listing<'_>,
-    message: Message,
-) -> Result<(), Error> {
-    match message.kind {
-        MessageKind::Text { ref data, .. } => match data.as_str() {
-            // "/start" => start_message(api, message).await?,
-            "/tabletki" => drugs_message(api, message).await?,
-            "/jojomeme" => send_meme(api, listing, message).await?,
-            "/jojomeme@saintnosubbot" => send_meme(api, listing, message).await?,
-            _ => parse_message(api, message).await?,
-        },
-        MessageKind::NewChatMembers { .. } => greet_users(api, message).await?,
-        MessageKind::LeftChatMember { .. } => goodbye_user(api, message).await?,
-        MessageKind::Photo { .. } => parse_photo(api, message).await?,
-        _ => (),
-    };
-
-    Ok(())
-}
-
-fn get_last_meme(listing: &mut rawr::structures::listing::Listing<'_>) -> Option<String> {
-    if let Some(post) = listing.next() {
-        return post.link_url();
+    async fn parse_message(&mut self, message: Message) -> Result<(), Error> {
+        if let MessageKind::Text { ref data, .. } = message.kind {
+            let text = data.as_str();
+            if message.from.is_bot {
+                if text.contains("#game") {
+                    self.reply_with_photo(message, String::from(FOOL_PIC_LINK))
+                        .await?;
+                }
+            }
+        }
+        Ok(())
     }
-    return None;
+    async fn parse_photo(&mut self, message: Message) -> Result<(), Error> {
+        if let MessageKind::Photo { .. } = message.kind {
+            println!("There is photo from {}", message.from.first_name);
+            if !message.from.is_bot {
+                if self.memeless_users.contains(&message.from) {
+                    println!("Removed {} fom possible bans", message.from.first_name);
+                    self.memeless_users.remove(&message.from);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn handle_message(&mut self, message: Message) -> Result<(), Error> {
+        match message.kind {
+            MessageKind::Text { ref data, .. } => match data.as_str() {
+                // "/start" => start_message(api, message).await?,
+                "/tabletki" => self.drugs_message(message).await?,
+                "/jojomeme" => self.send_meme(message).await?,
+                "/jojomeme@saintnosubbot" => self.send_meme(message).await?,
+                _ => self.parse_message(message).await?,
+            },
+            MessageKind::NewChatMembers { .. } => self.greet_users(message).await?,
+            MessageKind::LeftChatMember { .. } => self.goodbye_user(message).await?,
+            MessageKind::Photo { .. } => self.parse_photo(message).await?,
+            _ => (),
+        };
+        Ok(())
+    }
+    fn get_last_meme(&mut self) -> Option<String> {
+        if let Some(post) = self.hot_listing.next() {
+            return post.link_url();
+        }
+        return None;
+    }
 }
 
 #[tokio::main]
@@ -177,11 +176,12 @@ async fn main() -> Result<(), Error> {
     let mut hot_listing = subreddit
         .new(ListingOptions::default())
         .expect("Could not fetch post listing!");
+    let mut bot = SaintnosubBot::new(api.clone(), &mut hot_listing);
 
     while let Some(update) = stream.next().await {
         let update = update?;
         if let UpdateKind::Message(message) = update.kind {
-            handle_message(api.clone(), &mut hot_listing, message).await?;
+            bot.handle_message(message).await?;
         }
     }
 
