@@ -1,6 +1,11 @@
 extern crate rawr;
-use std::{collections::HashSet, env, thread, time};
+use std::{collections::HashSet, env, time};
 
+use tokio::sync::watch;
+use tokio::sync::watch::Receiver;
+use tokio::sync::watch::Sender;
+
+use futures::executor::block_on;
 use futures::StreamExt;
 use telegram_bot::prelude::*;
 use telegram_bot::{
@@ -22,24 +27,31 @@ pub struct SaintnosubBot<'a> {
     api: Api,
     hot_listing: &'a mut rawr::structures::listing::Listing<'a>,
     memeless_users: HashSet<User>,
+    sender: Sender<User>,
+    receiver: Receiver<User>,
 }
 
 impl<'a> SaintnosubBot<'a> {
     pub fn new(api: Api, hot_listing: &'a mut rawr::structures::listing::Listing<'a>) -> Self {
+        let future = api.send(GetMe);
+        let me = block_on(future).unwrap();
+        let (sender, receiver) = watch::channel(me);
         return SaintnosubBot {
             api: api,
             hot_listing: hot_listing,
             memeless_users: HashSet::new(),
+            sender: sender,
+            receiver: receiver,
         };
     }
-    async fn reply_with_photo(&mut self, message: Message, link: String) -> Result<(), Error> {
+    async fn reply_with_photo(&self, message: Message, link: String) -> Result<(), Error> {
         let mut photo =
             telegram_bot::requests::SendPhoto::new(message.chat, InputFileRef::new(link));
         photo.reply_to(message.id);
         self.api.send(photo).await?;
         Ok(())
     }
-    async fn drugs_message(&mut self, message: Message) -> Result<(), Error> {
+    async fn drugs_message(&self, message: Message) -> Result<(), Error> {
         if let Some(reply_box) = message.reply_to_message {
             let value = *reply_box;
             if let MessageOrChannelPost::Message(org_message) = value {
@@ -53,13 +65,37 @@ impl<'a> SaintnosubBot<'a> {
         Ok(())
     }
 
-    async fn wait_for_meme(&mut self, chat: MessageChat, user: User) -> Result<(), Error> {
-        println!("Wait for meme {} ", user.first_name);
-        // 15 mins to send a meme
-        thread::sleep(time::Duration::from_secs(900));
-        if self.memeless_users.contains(&user) {
-            println!("Kick {} ", user.first_name);
-            self.api.send(chat.kick(user)).await?;
+    async fn wait_for_meme(
+        &mut self,
+        chat: MessageChat,
+        users: HashSet<User>,
+    ) -> Result<(), Error> {
+        for user in &users {
+            println!("Wait for meme {} ", user.first_name);
+        }
+        for user in users {
+            let api = self.api.clone();
+            let receiver = self.receiver.clone();
+            let chat_copy = chat.clone();
+            let _future = std::thread::spawn(move || {
+                let start = time::Instant::now();
+                let mut ban = true;
+                let mut duration = start.elapsed();
+                while duration < time::Duration::from_secs(900) {
+                    let lastest_user = receiver.borrow();
+                    if lastest_user.id == user.id {
+                        ban = false;
+                        break;
+                    }
+                    duration = start.elapsed();
+                }
+                if ban {
+                    // 15 mins to send a meme
+                    println!("Kick {} ", user.first_name);
+                    let future = api.send(chat_copy.kick(user));
+                    let _result = block_on(future).unwrap();
+                }
+            });
         }
         Ok(())
     }
@@ -68,8 +104,10 @@ impl<'a> SaintnosubBot<'a> {
         if let MessageKind::NewChatMembers { ref data, .. } = message.kind {
             let me = self.api.send(GetMe).await?;
             let mut usernames = String::new();
+            let mut users = HashSet::new();
             for user in data {
                 if user.id != me.id {
+                    users.insert(user.clone());
                     self.memeless_users.insert(user.clone());
                     if let Some(login) = &user.username {
                         usernames = format!("{} @{}, ", usernames, login);
@@ -80,16 +118,11 @@ impl<'a> SaintnosubBot<'a> {
             }
             let greeting = format!("{} мем или бан!", usernames);
             self.api.send(message.clone().text_reply(greeting)).await?;
-            for user in data {
-                if user.id != me.id {
-                    self.wait_for_meme(message.clone().chat, user.clone())
-                        .await?;
-                }
-            }
+            self.wait_for_meme(message.clone().chat, users).await?;
         }
         Ok(())
     }
-    async fn goodbye_user(&mut self, message: Message) -> Result<(), Error> {
+    async fn goodbye_user(&self, message: Message) -> Result<(), Error> {
         if let MessageKind::LeftChatMember { ref data, .. } = message.kind {
             let result = self.api.send(GetMe).await?;
             if data.id != result.id {
@@ -109,7 +142,7 @@ impl<'a> SaintnosubBot<'a> {
         self.reply_with_photo(message, text).await?;
         Ok(())
     }
-    async fn parse_message(&mut self, message: Message) -> Result<(), Error> {
+    async fn parse_message(&self, message: Message) -> Result<(), Error> {
         if let MessageKind::Text { ref data, .. } = message.kind {
             let text = data.as_str();
             if message.from.is_bot {
@@ -128,6 +161,7 @@ impl<'a> SaintnosubBot<'a> {
                 if self.memeless_users.contains(&message.from) {
                     println!("Removed {} fom possible bans", message.from.first_name);
                     self.memeless_users.remove(&message.from);
+                    let _result = self.sender.broadcast(message.from);
                 }
             }
         }
