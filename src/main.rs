@@ -16,12 +16,14 @@ use telegram_bot::{
 
 use rawr::prelude::*;
 
-const FOOL_PIC_LINK: &str = "https://c7.hotpng.com/preview/259/820/839/dio-brando-jojo-s-bizarre-adventure-eyes-of-heaven-youtube-diamond-is-unbreakable-just-cause-thumbnail.jpg";
+// const FOOL_PIC_LINK: &str = "https://c7.hotpng.com/preview/259/820/839/dio-brando-jojo-s-bizarre-adventure-eyes-of-heaven-youtube-diamond-is-unbreakable-just-cause-thumbnail.jpg";
 // const APPROACHING_PIC_LINK: &str = "https://i.ytimg.com/vi/IJJM_ccGxSQ/maxresdefault.jpg";
 const WTF_PIC_LINK: &str = "https://i.redd.it/dv7afptdh9131.jpg";
 const ROAD_ROLLER_PIC_LINK: &str = "https://i.ytimg.com/vi/t1y3QOIRsYs/maxresdefault.jpg";
 const DOESNT_MATTER_PIC_LINK: &str =
     "https://i.kym-cdn.com/entries/icons/original/000/029/407/Screenshot_14.jpg";
+// const PIGS_FILE: &str = "1560517294111013742-converted.mp4";
+const PIGS_LINK: &str = "https://cs10.pikabu.ru/post_img/2019/06/14/8/1560517294111013742.gif";
 
 pub struct SaintnosubBot<'a> {
     api: Api,
@@ -51,6 +53,13 @@ impl<'a> SaintnosubBot<'a> {
         self.api.send(photo).await?;
         Ok(())
     }
+
+    async fn send_animation(&self, message: Message, link: String) -> Result<(), Error> {
+        let file = InputFileRef::new(link);
+        self.api.send(message.chat.video(file)).await?;
+        Ok(())
+    }
+
     async fn drugs_message(&self, message: Message) -> Result<(), Error> {
         if let Some(reply_box) = message.reply_to_message {
             let value = *reply_box;
@@ -144,12 +153,10 @@ impl<'a> SaintnosubBot<'a> {
     }
     async fn parse_message(&self, message: Message) -> Result<(), Error> {
         if let MessageKind::Text { ref data, .. } = message.kind {
-            let text = data.as_str();
-            if message.from.is_bot {
-                if text.contains("#game") {
-                    self.reply_with_photo(message, String::from(FOOL_PIC_LINK))
-                        .await?;
-                }
+            let text = data.as_str().to_lowercase();
+            if text.contains("дементий") {
+                self.send_animation(message, String::from(PIGS_LINK))
+                    .await?;
             }
         }
         Ok(())
@@ -210,6 +217,7 @@ async fn main() -> Result<(), Error> {
     let mut hot_listing = subreddit
         .new(ListingOptions::default())
         .expect("Could not fetch post listing!");
+
     let mut bot = SaintnosubBot::new(api.clone(), &mut hot_listing);
 
     while let Some(update) = stream.next().await {
