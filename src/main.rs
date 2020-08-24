@@ -7,12 +7,12 @@ use tokio::sync::watch::Sender;
 
 use futures::executor::block_on;
 use futures::StreamExt;
+use rand::seq::SliceRandom;
 use telegram_bot::prelude::*;
 use telegram_bot::{
     Api, Error, GetMe, InputFileRef, Message, MessageChat, MessageKind, MessageOrChannelPost,
     UpdateKind, User,
 };
-// use tokio::time::delay_for;
 
 use rawr::prelude::*;
 
@@ -22,8 +22,21 @@ const WTF_PIC_LINK: &str = "https://i.redd.it/dv7afptdh9131.jpg";
 const ROAD_ROLLER_PIC_LINK: &str = "https://i.ytimg.com/vi/t1y3QOIRsYs/maxresdefault.jpg";
 const DOESNT_MATTER_PIC_LINK: &str =
     "https://i.kym-cdn.com/entries/icons/original/000/029/407/Screenshot_14.jpg";
-// const PIGS_FILE: &str = "1560517294111013742-converted.mp4";
-const PIGS_LINK: &str = "https://cs10.pikabu.ru/post_img/2019/06/14/8/1560517294111013742.gif";
+
+const PIGS_LINKS: &'static [&'static str] = &[
+    "https://cs10.pikabu.ru/post_img/2019/06/14/8/1560517294111013742.gif",
+    "https://cs11.pikabu.ru/post_img/2019/06/14/8/1560517238115787100.gif",
+    "https://cs7.pikabu.ru/post_img/2019/06/14/8/156051726414098019.gif",
+    "https://cs7.pikabu.ru/post_img/2019/06/14/8/15605172431238525.gif",
+    "https://cs10.pikabu.ru/post_img/2019/06/14/8/1560517177190448543.gif",
+    "https://cs13.pikabu.ru/post_img/2019/06/14/8/1560517198188894105.gif",
+    "https://cs11.pikabu.ru/post_img/2019/06/14/8/1560517203152341690.gif",
+    "https://cs10.pikabu.ru/post_img/2019/06/14/8/1560517207120834751.gif",
+    "https://cs7.pikabu.ru/post_img/2019/06/14/8/1560517210125498145.gif",
+    "https://cs11.pikabu.ru/post_img/2019/06/14/8/1560517218171725970.gif",
+];
+
+const SECS_TO_BAN: u64 = 1800; // 30 min
 
 pub struct SaintnosubBot<'a> {
     api: Api,
@@ -90,7 +103,7 @@ impl<'a> SaintnosubBot<'a> {
                 let start = time::Instant::now();
                 let mut ban = true;
                 let mut duration = start.elapsed();
-                while duration < time::Duration::from_secs(900) {
+                while duration < time::Duration::from_secs(SECS_TO_BAN) {
                     let lastest_user = receiver.borrow();
                     if lastest_user.id == user.id {
                         ban = false;
@@ -155,7 +168,8 @@ impl<'a> SaintnosubBot<'a> {
         if let MessageKind::Text { ref data, .. } = message.kind {
             let text = data.as_str().to_lowercase();
             if text.contains("дементий") {
-                self.send_animation(message, String::from(PIGS_LINK))
+                let random_pig_link = *PIGS_LINKS.choose(&mut rand::thread_rng()).unwrap();
+                self.send_animation(message, String::from(random_pig_link.clone()))
                     .await?;
             }
         }
