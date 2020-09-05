@@ -1,5 +1,11 @@
-extern crate rawr;
-use std::{collections::HashSet, env, time};
+mod memes;
+
+use log::LevelFilter;
+use log4rs::append::file::FileAppender;
+use log4rs::config::{Appender, Config, Root};
+use log4rs::encode::pattern::PatternEncoder;
+
+use std::{collections::HashSet, env, thread, time};
 
 use tokio::sync::watch;
 use tokio::sync::watch::Receiver;
@@ -7,53 +13,32 @@ use tokio::sync::watch::Sender;
 
 use futures::executor::block_on;
 use futures::StreamExt;
-use rand::seq::SliceRandom;
 use telegram_bot::prelude::*;
 use telegram_bot::{
-    Api, Error, GetMe, InputFileRef, Message, MessageChat, MessageKind, MessageOrChannelPost,
-    UpdateKind, User,
+    Api, Error, GetMe, InputFileRef, Message, MessageChat, MessageKind, UpdateKind, User,
 };
 
-use rawr::prelude::*;
-
-// const FOOL_PIC_LINK: &str = "https://c7.hotpng.com/preview/259/820/839/dio-brando-jojo-s-bizarre-adventure-eyes-of-heaven-youtube-diamond-is-unbreakable-just-cause-thumbnail.jpg";
-// const APPROACHING_PIC_LINK: &str = "https://i.ytimg.com/vi/IJJM_ccGxSQ/maxresdefault.jpg";
-const WTF_PIC_LINK: &str = "https://i.redd.it/dv7afptdh9131.jpg";
-const ROAD_ROLLER_PIC_LINK: &str = "https://i.ytimg.com/vi/t1y3QOIRsYs/maxresdefault.jpg";
-const DOESNT_MATTER_PIC_LINK: &str =
-    "https://i.kym-cdn.com/entries/icons/original/000/029/407/Screenshot_14.jpg";
-
-const PIGS_LINKS: &'static [&'static str] = &[
-    "https://cs10.pikabu.ru/post_img/2019/06/14/8/1560517294111013742.gif",
-    "https://cs11.pikabu.ru/post_img/2019/06/14/8/1560517238115787100.gif",
-    "https://cs7.pikabu.ru/post_img/2019/06/14/8/156051726414098019.gif",
-    "https://cs7.pikabu.ru/post_img/2019/06/14/8/15605172431238525.gif",
-    "https://cs10.pikabu.ru/post_img/2019/06/14/8/1560517177190448543.gif",
-    "https://cs13.pikabu.ru/post_img/2019/06/14/8/1560517198188894105.gif",
-    "https://cs11.pikabu.ru/post_img/2019/06/14/8/1560517203152341690.gif",
-    "https://cs10.pikabu.ru/post_img/2019/06/14/8/1560517207120834751.gif",
-    "https://cs7.pikabu.ru/post_img/2019/06/14/8/1560517210125498145.gif",
-    "https://cs11.pikabu.ru/post_img/2019/06/14/8/1560517218171725970.gif",
-];
+const DRUGS_LINK: &str = "https://i.pinimg.com/474x/42/5e/53/425e5339585cf1435c76a0b4457693f8.jpg";
 
 const SECS_TO_BAN: u64 = 1800; // 30 min
+const POLLING_DELAY_SECS: u64 = 1800; // 30 min
 
-pub struct SaintnosubBot<'a> {
+pub struct SaintnosubBot {
     api: Api,
-    hot_listing: &'a mut rawr::structures::listing::Listing<'a>,
+    memes_reader: memes::MemeReader,
     memeless_users: HashSet<User>,
     sender: Sender<User>,
     receiver: Receiver<User>,
 }
 
-impl<'a> SaintnosubBot<'a> {
-    pub fn new(api: Api, hot_listing: &'a mut rawr::structures::listing::Listing<'a>) -> Self {
+impl SaintnosubBot {
+    pub fn new(api: Api) -> Self {
         let future = api.send(GetMe);
         let me = block_on(future).unwrap();
         let (sender, receiver) = watch::channel(me);
         return SaintnosubBot {
             api: api,
-            hot_listing: hot_listing,
+            memes_reader: memes::MemeReader::new(),
             memeless_users: HashSet::new(),
             sender: sender,
             receiver: receiver,
@@ -74,16 +59,8 @@ impl<'a> SaintnosubBot<'a> {
     }
 
     async fn drugs_message(&self, message: Message) -> Result<(), Error> {
-        if let Some(reply_box) = message.reply_to_message {
-            let value = *reply_box;
-            if let MessageOrChannelPost::Message(org_message) = value {
-                self.reply_with_photo(org_message, String::from(ROAD_ROLLER_PIC_LINK))
-                    .await?;
-            }
-        } else {
-            self.reply_with_photo(message, String::from(DOESNT_MATTER_PIC_LINK))
-                .await?;
-        }
+        self.reply_with_photo(message, String::from(DRUGS_LINK))
+            .await?;
         Ok(())
     }
 
@@ -93,7 +70,7 @@ impl<'a> SaintnosubBot<'a> {
         users: HashSet<User>,
     ) -> Result<(), Error> {
         for user in &users {
-            println!("Wait for meme {} ", user.first_name);
+            log::info!("Waiting for meme from {}", user.first_name);
         }
         for user in users {
             let api = self.api.clone();
@@ -104,16 +81,17 @@ impl<'a> SaintnosubBot<'a> {
                 let mut ban = true;
                 let mut duration = start.elapsed();
                 while duration < time::Duration::from_secs(SECS_TO_BAN) {
-                    let lastest_user = receiver.borrow();
-                    if lastest_user.id == user.id {
+                    let latest_user = receiver.borrow();
+                    if latest_user.id == user.id {
                         ban = false;
                         break;
                     }
                     duration = start.elapsed();
+                    let polling_delay = time::Duration::from_millis(POLLING_DELAY_SECS);
+                    thread::sleep(polling_delay);
                 }
                 if ban {
-                    // 15 mins to send a meme
-                    println!("Kick {} ", user.first_name);
+                    log::info!("Kicking {} for no meme", user.first_name);
                     let future = api.send(chat_copy.kick(user));
                     let _result = block_on(future).unwrap();
                 }
@@ -156,20 +134,15 @@ impl<'a> SaintnosubBot<'a> {
     }
 
     async fn send_meme(&mut self, message: Message) -> Result<(), Error> {
-        let reply = self.get_last_meme();
-        let mut text = String::from(WTF_PIC_LINK);
-        if let Some(title) = reply {
-            text = title;
-        }
-        self.reply_with_photo(message, text).await?;
+        let link = self.memes_reader.get_meme();
+        self.reply_with_photo(message, link).await?;
         Ok(())
     }
     async fn parse_message(&self, message: Message) -> Result<(), Error> {
         if let MessageKind::Text { ref data, .. } = message.kind {
             let text = data.as_str().to_lowercase();
             if text.contains("дементий") {
-                let random_pig_link = *PIGS_LINKS.choose(&mut rand::thread_rng()).unwrap();
-                self.send_animation(message, String::from(random_pig_link.clone()))
+                self.send_animation(message, memes::get_random_pig())
                     .await?;
             }
         }
@@ -177,13 +150,10 @@ impl<'a> SaintnosubBot<'a> {
     }
     async fn parse_photo(&mut self, message: Message) -> Result<(), Error> {
         if let MessageKind::Photo { .. } = message.kind {
-            println!("There is photo from {}", message.from.first_name);
-            if !message.from.is_bot {
-                if self.memeless_users.contains(&message.from) {
-                    println!("Removed {} fom possible bans", message.from.first_name);
-                    self.memeless_users.remove(&message.from);
-                    let _result = self.sender.broadcast(message.from);
-                }
+            if self.memeless_users.contains(&message.from) {
+                log::info!("Removed {} fom possible bans", message.from.first_name);
+                self.memeless_users.remove(&message.from);
+                let _result = self.sender.broadcast(message.from);
             }
         }
         Ok(())
@@ -192,7 +162,6 @@ impl<'a> SaintnosubBot<'a> {
     async fn handle_message(&mut self, message: Message) -> Result<(), Error> {
         match message.kind {
             MessageKind::Text { ref data, .. } => match data.as_str() {
-                // "/start" => start_message(api, message).await?,
                 "/tabletki" => self.drugs_message(message).await?,
                 "/jojomeme" => self.send_meme(message).await?,
                 "/jojomeme@saintnosubbot" => self.send_meme(message).await?,
@@ -205,34 +174,29 @@ impl<'a> SaintnosubBot<'a> {
         };
         Ok(())
     }
-    fn get_last_meme(&mut self) -> Option<String> {
-        if let Some(post) = self.hot_listing.next() {
-            return post.link_url();
-        }
-        return None;
-    }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
+    let logfile = FileAppender::builder()
+        .encoder(Box::new(PatternEncoder::new("{l} - {m}\n")))
+        .build("log/output.log")
+        .unwrap();
+
+    let config = Config::builder()
+        .appender(Appender::builder().build("logfile", Box::new(logfile)))
+        .build(Root::builder().appender("logfile").build(LevelFilter::Info))
+        .unwrap();
+
     let token = env::var("TELEGRAM_BOT_TOKEN").expect("TELEGRAM_BOT_TOKEN not set");
+
+    log4rs::init_config(config).unwrap();
+    log::info!("Starting saintnosub_bot...");
 
     let api = Api::new(token);
     let mut stream = api.stream();
 
-    let client = RedditClient::new(
-        "linux:saintnosubbot:v0.0.1 (by /u/Lemiort)",
-        AnonymousAuthenticator::new(),
-    );
-    // Access the subreddit /r/ShitPostCrusaders.
-    let subreddit = client.subreddit("ShitPostCrusaders");
-
-    // Gets the hot listing of /r/ShitPostCrusaders. If the API request fails, we will panic with `expect`.
-    let mut hot_listing = subreddit
-        .new(ListingOptions::default())
-        .expect("Could not fetch post listing!");
-
-    let mut bot = SaintnosubBot::new(api.clone(), &mut hot_listing);
+    let mut bot = SaintnosubBot::new(api.clone());
 
     while let Some(update) = stream.next().await {
         let update = update?;

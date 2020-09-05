@@ -8,9 +8,10 @@ edition = "2018"
 
 [dependencies]
 futures = "0.3.5"
-telegram-bot = {git="https://github.com/telegram-rs/telegram-bot"}
-tokio-core = "0.1"
+telegram-bot = "0.7.0"
 tokio = { version = "0.2", features = ["full"] }
-rawr = {git="https://github.com/Jokler/rawr.git"}
 regex = "1"
 rand = "0.7.3"
+roux = "1.1.1"
+log = "0.4.11"
+log4rs = "0.13.0"
