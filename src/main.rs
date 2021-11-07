@@ -153,7 +153,7 @@ impl SaintnosubBot {
             if self.memeless_users.contains(&message.from) {
                 log::info!("Removed {} fom possible bans", message.from.first_name);
                 self.memeless_users.remove(&message.from);
-                let _result = self.sender.broadcast(message.from);
+                let _result = self.sender.send(message.from);
             }
         }
         Ok(())

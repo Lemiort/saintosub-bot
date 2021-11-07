@@ -1,5 +1,6 @@
 use futures::executor::block_on;
 use rand::seq::SliceRandom;
+use roux::util::error::RouxError;
 use roux::util::FeedOption;
 use roux::Subreddit;
 
@@ -15,18 +16,27 @@ pub struct MemeReader {
 impl MemeReader {
     pub fn new() -> Self {
         let subreddit = Subreddit::new("ShitpostCrusaders");
-        let hot = block_on(subreddit.rising(MEMES_COUNT, None)).unwrap();
-        let iter = hot.data.children.iter();
-        let mut memes_buffer = Vec::new();
-        for value in iter {
-            let link = value.data.url.as_ref().unwrap().clone();
-            memes_buffer.push(link);
-        }
-        return MemeReader {
-            subreddit: subreddit,
-            listing: hot,
-            memes_buffer: memes_buffer,
-            memes_iter: 0,
+        let result = block_on(subreddit.hot(MEMES_COUNT, None));
+        match result {
+            Ok(hot) => {
+                let iter = hot.data.children.iter();
+                let mut memes_buffer = Vec::new();
+                for value in iter {
+                    let link = value.data.url.as_ref().unwrap().clone();
+                    memes_buffer.push(link);
+                }
+                return MemeReader {
+                    subreddit: subreddit,
+                    listing: hot,
+                    memes_buffer: memes_buffer,
+                    memes_iter: 0,
+                };
+            }
+            Err(answer) => match answer {
+                RouxError::Network(e) => panic!("network error: {}", e),
+                RouxError::Parse(_) => panic!("parsing error"),
+                RouxError::Status(_) => panic!("api error"),
+            },
         };
     }
 
