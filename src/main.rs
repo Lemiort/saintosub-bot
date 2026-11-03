@@ -1,4 +1,7 @@
+mod llm;
 mod memes;
+#[cfg(test)]
+mod test_http;
 
 use std::{collections::HashSet, env, sync::Arc, time::Duration};
 
@@ -23,6 +26,7 @@ struct SaintnosubBot {
     memeless_users: PendingUsers,
     me: UserId,
     username: String,
+    llm: Option<llm::LlmClient>,
 }
 
 impl SaintnosubBot {
@@ -41,7 +45,9 @@ impl SaintnosubBot {
             message.id,
             message.chat.id
         );
+        let mut handled = false;
         if let Some(users) = message.new_chat_members() {
+            handled = true;
             let mut usernames = Vec::new();
             for user in users.iter().filter(|user| user.id != self.me) {
                 let key = (message.chat.id, user.id);
@@ -73,6 +79,7 @@ impl SaintnosubBot {
                     .await?;
             }
         } else if let Some(user) = message.left_chat_member() {
+            handled = true;
             self.memeless_users
                 .lock()
                 .await
@@ -93,12 +100,17 @@ impl SaintnosubBot {
         } else if let Some(text) = message.text() {
             match command_name(text, &self.username) {
                 Some("start" | "help") => {
+                    handled = true;
                     self.api.send_message(message.chat.id,
-                        "Bot is online. /jojomeme — fetch a JoJo meme; /tabletki — send the drugs photo.")
+                        "Bot is online. /jojomeme — fetch a JoJo meme; /tabletki — send the drugs photo. When LLM is enabled, chat privately or mention me in a group; media support depends on the configured model.")
                         .reply_parameters(ReplyParameters::new(message.id)).await?;
                 }
-                Some("tabletki") => self.reply_with_photo(&message, DRUGS_LINK).await?,
+                Some("tabletki") => {
+                    handled = true;
+                    self.reply_with_photo(&message, DRUGS_LINK).await?;
+                }
                 Some("jojomeme") => {
+                    handled = true;
                     log::info!("Fetching meme for chat {}", message.chat.id);
                     let result = self.memes_reader.lock().await.get_meme().await;
                     match result {
@@ -116,14 +128,37 @@ impl SaintnosubBot {
                     }
                 }
                 None if !text.trim_start().starts_with('/')
+                    && (self.llm.is_none()
+                        || !llm::should_respond(&message, self.me, &self.username))
                     && text.to_lowercase().contains("дементий") =>
                 {
+                    handled = true;
                     let url = memes::get_random_pig().parse().expect("invalid pig URL");
                     self.api
                         .send_video(message.chat.id, InputFile::url(url))
                         .await?;
                 }
                 _ => {}
+            }
+        }
+        if !handled
+            && llm::should_respond(&message, self.me, &self.username)
+            && let Some(llm) = &self.llm
+        {
+            let reply = match llm.answer(&self.api, &message).await {
+                Ok(reply) => reply,
+                Err(error) => {
+                    log::error!("LLM request failed: {error:#}");
+                    error.downcast_ref::<llm::InputError>().map_or_else(
+                        || "The language model is unavailable or rejected this input. Please try again later.".to_owned(),
+                        |error| error.to_string())
+                }
+            };
+            for chunk in llm::reply_chunks(&reply) {
+                self.api
+                    .send_message(message.chat.id, chunk)
+                    .reply_parameters(ReplyParameters::new(message.id))
+                    .await?;
             }
         }
         Ok(())
@@ -154,6 +189,21 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
 #[tokio::main]
 async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let llm = llm::Config::from_env()?
+        .map(llm::LlmClient::new)
+        .transpose()?;
+    if env::args().any(|arg| arg == "--check-llm") {
+        let llm = llm.as_ref().ok_or_else(|| {
+            std::io::Error::other("Set LLM_ENABLED=true and configure LLM_MODEL in .env first")
+        })?;
+        let arguments: Vec<_> = env::args().collect();
+        let image = arguments
+            .windows(2)
+            .find(|pair| pair[0] == "--llm-image")
+            .map(|pair| std::path::Path::new(&pair[1]));
+        println!("LLM response: {}", llm.check(image).await?);
+        return Ok(());
+    }
     if env::args().any(|arg| arg == "--check-memes") {
         let url = memes::MemeReader::new()?.check().await?;
         println!("Successfully fetched meme image: {url}");
@@ -189,6 +239,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .build(LevelFilter::Info),
         )?;
     log4rs::init_config(config)?;
+    log::info!(
+        "LLM integration: {}",
+        if llm.is_some() { "enabled" } else { "disabled" }
+    );
 
     let token = env::var("TELEGRAM_BOT_TOKEN")?;
     let api = Bot::new(token);
@@ -245,6 +299,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         memeless_users: Arc::new(Mutex::new(HashSet::new())),
         me: me.id,
         username: me.username().to_owned(),
+        llm,
     });
     log::info!("Starting saintnosub_bot...");
     let check_dispatch = env::args().any(|arg| arg == "--check-dispatch");
@@ -281,6 +336,85 @@ mod tests {
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
 
+    fn llm_test_bot(api_url: &str, provider_url: &str) -> SaintnosubBot {
+        let settings = llm::Config::from_lookup(|key| match key {
+            "LLM_BASE_URL" => Some(format!("{provider_url}/v1")),
+            "LLM_MODEL" => Some("test-model".into()),
+            "LLM_MEDIA" => Some("image".into()),
+            _ => None,
+        })
+        .unwrap();
+        SaintnosubBot {
+            api: Bot::new("123:TEST").set_api_url(api_url.parse().unwrap()),
+            memes_reader: Mutex::new(memes::MemeReader::new().unwrap()),
+            memeless_users: Arc::new(Mutex::new(HashSet::new())),
+            me: UserId(99),
+            username: "ActualBot".into(),
+            llm: Some(llm::LlmClient::new(settings).unwrap()),
+        }
+    }
+
+    fn mock_telegram_reply() -> Vec<u8> {
+        br#"{"ok":true,"result":{"message_id":2,"date":0,"chat":{"id":7,"type":"private"},"text":"ok"}}"#.to_vec()
+    }
+
+    #[tokio::test]
+    async fn private_text_uses_llm_while_unmentioned_group_text_is_ignored() {
+        use crate::test_http::MockServer;
+        let telegram = MockServer::new(vec![(200, mock_telegram_reply())]);
+        let provider = MockServer::new(vec![(
+            200,
+            br#"{"choices":[{"message":{"content":"LLM answer"}}]}"#.to_vec(),
+        )]);
+        let bot = llm_test_bot(&telegram.url, &provider.url);
+        let private: Message = serde_json::from_value(serde_json::json!({
+            "message_id":1, "date":0, "chat":{"id":7,"type":"private"},
+            "from":{"id":7,"is_bot":false,"first_name":"Tester"}, "text":"hello model"
+        }))
+        .unwrap();
+        bot.handle_message(private).await.unwrap();
+        let group = serde_json::from_value(serde_json::json!({
+            "message_id":2, "date":0, "chat":{"id":-7,"type":"supergroup","title":"Test"},
+            "from":{"id":7,"is_bot":false,"first_name":"Tester"}, "text":"ordinary group text"
+        }))
+        .unwrap();
+        bot.handle_message(group).await.unwrap();
+        assert_eq!(provider.requests().len(), 1);
+        let reply: serde_json::Value =
+            serde_json::from_slice(&telegram.requests()[0].body).unwrap();
+        assert_eq!(reply["text"], "LLM answer");
+    }
+
+    #[tokio::test]
+    async fn mentioned_group_photo_reaches_llm_and_still_clears_meme_deadline() {
+        use crate::test_http::MockServer;
+        let telegram = MockServer::new(vec![
+            (200, br#"{"ok":true,"result":{"file_id":"photo","file_unique_id":"unique","file_size":3,"file_path":"photos/test.jpg"}}"#.to_vec()),
+            (200, vec![1,2,3]), (200, mock_telegram_reply())]);
+        let provider = MockServer::new(vec![(
+            200,
+            br#"{"choices":[{"message":{"content":"I see the image"}}]}"#.to_vec(),
+        )]);
+        let bot = llm_test_bot(&telegram.url, &provider.url);
+        bot.memeless_users
+            .lock()
+            .await
+            .insert((ChatId(-7), UserId(7)));
+        let photo = serde_json::from_value(serde_json::json!({
+            "message_id":1,"date":0,"chat":{"id":-7,"type":"supergroup","title":"Test"},
+            "from":{"id":7,"is_bot":false,"first_name":"Tester"},
+            "caption":"@ActualBot describe","caption_entities":[{"type":"mention","offset":0,"length":10}],
+            "photo":[{"file_id":"photo","file_unique_id":"unique","file_size":3,"width":1,"height":1}]
+        })).unwrap();
+        bot.handle_message(photo).await.unwrap();
+        assert!(bot.memeless_users.lock().await.is_empty());
+        assert_eq!(provider.requests().len(), 1);
+        let requests = telegram.requests();
+        let reply: serde_json::Value = serde_json::from_slice(&requests[2].body).unwrap();
+        assert_eq!(reply["chat_id"], -7);
+        assert_eq!(reply["text"], "I see the image");
+    }
+
     #[tokio::test]
     async fn repl_polls_and_dispatches_a_private_command() {
         use std::sync::atomic::{AtomicBool, Ordering};
@@ -306,6 +440,7 @@ mod tests {
                     }
                     Err(error) => panic!("mock Telegram accept failed: {error}"),
                 };
+                socket.set_nonblocking(false).unwrap();
                 socket
                     .set_read_timeout(Some(Duration::from_secs(5)))
                     .unwrap();
@@ -363,6 +498,7 @@ mod tests {
         let url = format!("http://{}/", listener.local_addr().unwrap());
         let server = std::thread::spawn(move || {
             let (mut socket, _) = listener.accept().unwrap();
+            socket.set_nonblocking(false).unwrap();
             socket
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
@@ -390,6 +526,7 @@ mod tests {
             memeless_users: Arc::new(Mutex::new(HashSet::new())),
             me: UserId(99),
             username: "ActualBot".into(),
+            llm: None,
         };
         let message = serde_json::from_value(serde_json::json!({
             "message_id": 1, "date": 0,
