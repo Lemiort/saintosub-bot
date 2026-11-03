@@ -1,4 +1,4 @@
 /target
 .vscode/launch.json
 src/main
-Cargo.lock
+.env
