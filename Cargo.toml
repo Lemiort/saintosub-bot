@@ -2,16 +2,20 @@
 name = "saintnosub-bot"
 version = "1.2.1"
 authors = ["Lemiort <lemiort@gmail.com>"]
-edition = "2018"
+edition = "2024"
+rust-version = "1.99"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-futures = "0.3.5"
-telegram-bot ={ git = "https://github.com/telegram-rs/telegram-bot.git", branch = "main" }
-tokio = { version = "1.12.0", features = ["full"] }
-regex = "1"
-rand = "0.8.4"
-roux = { git="https://github.com/halcyonnouveau/roux.git", branch = "master"}
-log = "0.4.11"
-log4rs = "1.0.0"
+teloxide = "0.17.0"
+tokio = { version = "1.54.1", features = ["full"] }
+rand = "0.10.3"
+reqwest = { version = "0.13.5", features = ["json", "query"] }
+serde = { version = "1.0.229", features = ["derive"] }
+log = "0.4.35"
+log4rs = { version = "1.4.0", default-features = false, features = ["console_appender", "file_appender", "pattern_encoder"] }
+dotenvy = "0.15.7"
+
+[dev-dependencies]
+serde_json = "1.0.154"
